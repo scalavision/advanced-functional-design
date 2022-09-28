@@ -19,6 +19,7 @@ object Department {
 object recommendations {
   trait RecommendationStrategy {
     def recommend(product: Product): List[Product]
+
   }
   case object CrossSell extends RecommendationStrategy {
     override def recommend(product: Product): List[Product] =

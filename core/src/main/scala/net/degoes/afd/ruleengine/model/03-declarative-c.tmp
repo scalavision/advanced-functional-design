@@ -1,0 +1,388 @@
+/**
+ * Executable encodings are free of boilerplate and fast and flexible. However,
+ * they tend to be less powerful and principled than declarative encodings,
+ * which can be used with infinitely many different interpreters, each doing
+ * something different (and useful!) with the model.
+ *
+ * In this section, you will refactor the rule engine you created to use the
+ * declarative encoding. In the process, you will discover _expressions_, which
+ * are recipes to describe the production of values from other values.
+ *
+ * To push this model to its logical conclusion, it will be necessary to
+ * eliminate all Scala functions, which raises questions about how well-typed
+ * you want to make the model.
+ */
+package net.degoes.afd.ruleengine
+
+import scala.language.implicitConversions
+
+/**
+ * Develop a fully declarative encoding of a rule engine. You are NOT allowed to
+ * use any Scala functions in your model. Rather, your model must be purely
+ * ADT-based. Attempt to make your model as type-safe as possible, but sacrifice
+ * type-safety if necessary in order to avoid the embedding of Scala functions
+ * in your model.
+ *
+ * You must develop an executor for the model which, given input and the rule
+ * set, produces actions as output.
+ */
+object declarative {
+
+  sealed trait Json
+  object Json {
+    final case class Obj(fields: Map[String, Json]) extends Json
+    final case class Arr(fields: Vector[Json])      extends Json
+    final case class Str(value: String)             extends Json
+    final case class Num(value: Double)             extends Json
+    final case class Bool(value: Boolean)           extends Json
+    case object Null                                extends Json
+  }
+
+  /*
+  sealed trait RuleEngine[-In, +Out] {
+    def update(in: In): Option[List[Out]]
+  }
+   */
+  final case class RuleEngine[-In, +Out](update: In => Option[List[Out]]) { self =>
+
+    def contramap[In2](f: In2 => In): RuleEngine[In2, Out] = RuleEngine(in2 => self.update(f(in2)))
+
+    def orElse[In1 <: In, Out1 >: Out](that: RuleEngine[In1, Out1]): RuleEngine[In1, Out1] =
+      RuleEngine(in => self.update(in) orElse that.update(in))
+
+    def updateWith[Out1 >: Out](in: In)(defaultOut: Out1, combine: (Out1, Out1) => Out1): Out1 =
+      self.update(in) match {
+        case None => defaultOut
+
+        case Some(outs) =>
+          outs.reduceOption(combine).getOrElse(defaultOut)
+      }
+  }
+  object RuleEngine {
+
+    def apply[In, Out](f: In => Option[List[Out]]): RuleEngine[In, Out] =
+      new RuleEngine(f)
+
+    val empty: RuleEngine[Any, Nothing] = RuleEngine(_ => None)
+
+    def collect[In, Out](pf: PartialFunction[In, Out]): RuleEngine[In, Out] =
+      RuleEngine(in => pf.lift(in).map(List(_)))
+
+    def constant[Out](out: Out): RuleEngine[Any, Out] = fromFunction(_ => out)
+
+    def fromFunction[In, Out](f: In => Out): RuleEngine[In, Out] = RuleEngine(in => Some(List(f(in))))
+
+    def fromRuleSet[In, Out](ruleSet: RuleSet[In, Out]): RuleEngine[In, Out] =
+      RuleEngine(??? /*ruleSet.update*/ )
+
+  }
+  
+  final case class RuleSet[-In, +Out](rules: Vector[Rule[In, Out]]) { self =>
+    def +[In1 <: In, Out1 >: Out](that: Rule[In1, Out1]): RuleSet[In1, Out1] =
+      RuleSet(self.rules :+ that)
+
+    def ++[In1 <: In, Out1 >: Out](that: RuleSet[In1, Out1]): RuleSet[In1, Out1] =
+      RuleSet(self.rules ++ that.rules)
+
+    def addRule[In1 <: In, Out1 >: Out](that: Rule[In1, Out1]): RuleSet[In1, Out1] = self + that
+
+  }
+
+  object RuleSet {
+    def apply[In, Out](rule1: Rule[In, Out], rules: Rule[In, Out]*): RuleSet[In, Out] = RuleSet(
+      rule1 +: rules.toVector
+    )
+
+    val empty: RuleSet[Any, Nothing] = RuleSet(Vector.empty)
+  }
+
+  final case class Rule[-In, +Out](condition: Condition[In], action: Action[In, Out])
+
+  sealed trait PrimitiveType[A] {
+    def ordering: scala.math.Ordering[A]
+  }
+  object PrimitiveType {
+    implicit case object BooleanType extends PrimitiveType[Boolean] {
+      def ordering: scala.math.Ordering[Boolean] = scala.math.Ordering[Boolean]
+    }
+    implicit case object ByteType extends PrimitiveType[Byte] {
+      def ordering: scala.math.Ordering[Byte] = scala.math.Ordering[Byte]
+    }
+    implicit case object ShortType extends PrimitiveType[Short] {
+      def ordering: scala.math.Ordering[Short] = scala.math.Ordering[Short]
+    }
+    implicit case object CharType extends PrimitiveType[Char] {
+      def ordering: scala.math.Ordering[Char] = scala.math.Ordering[Char]
+    }
+    implicit case object IntType extends PrimitiveType[Int] {
+      def ordering: scala.math.Ordering[Int] = scala.math.Ordering[Int]
+    }
+    implicit case object DoubleType extends PrimitiveType[Double] {
+      def ordering: scala.math.Ordering[Double] = scala.math.Ordering[Double]
+    }
+    implicit case object StringType extends PrimitiveType[String] {
+      def ordering: scala.math.Ordering[String] = scala.math.Ordering[String]
+    }
+    implicit case object FloatType extends PrimitiveType[Float] {
+      def ordering: scala.math.Ordering[Float] = scala.math.Ordering[Float]
+    }
+    implicit case object LongType extends PrimitiveType[Long] {
+      def ordering: scala.math.Ordering[Long] = scala.math.Ordering[Long]
+    }
+  }
+
+  sealed trait Numeric[A]
+  object Numeric {
+    implicit case object ByteNumeric  extends Numeric[Byte]
+    implicit case object CharNumeric  extends Numeric[Char]
+    implicit case object ShortNumeric extends Numeric[Short]
+    implicit case object IntNumeric   extends Numeric[Int]
+    implicit case object FloatNumeric extends Numeric[Float]
+    implicit case object LongNumeric  extends Numeric[Long]
+  }
+  
+  // recipe that will produce a value
+  // expression 2 * 3 will produce a value
+  // Description of an expression
+  // 2 * (3 + 123) / "foo".length
+  // Expression is pure
+  // Declarative model of expression, basis for doing
+  // computation and manipulation
+  // how to construct values
+  // Not a full programming language, a locked down subset
+  // Language of calculators is an example
+  // Description of how to compute a value of type Out
+  // () => Out
+  // In and Out does not need to be scala types, they can be generics (i.e. using shapeless like types) 
+  sealed trait Expr[-In, +Out] { self =>
+
+    final def +[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit tag: Numeric[Out1]): Expr[In1, Out1] =
+      Expr.BinaryNumericOp(self.widen, that, Expr.NumericBinOpType.Add, tag)
+
+    final def -[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit tag: Numeric[Out1]): Expr[In1, Out1] =
+      Expr.BinaryNumericOp(self.widen, that, Expr.NumericBinOpType.Sub, tag)
+
+    final def *[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit tag: Numeric[Out1]): Expr[In1, Out1] =
+      Expr.BinaryNumericOp(self.widen, that, Expr.NumericBinOpType.Mul, tag)
+
+    final def &&[In1 <: In](that: Expr[In1, Boolean])(implicit ev: Out <:< Boolean): Expr[In1, Boolean] =
+      Expr.And(self.widen[Boolean], that)
+
+    final def ||[In1 <: In](that: Expr[In1, Boolean])(implicit ev: Out <:< Boolean): Expr[In1, Boolean] =
+      Expr.Or(self.widen[Boolean], that)
+
+    final def unary_!(implicit ev: Out <:< Boolean): Expr[In, Boolean] =
+      Expr.Not(self.widen[Boolean])
+
+    final def ===[In1 <: In, Out1 >: Out](that: Expr[In1, Out1]): Expr[In1, Boolean] =
+      Expr.EqualTo(self, that)
+
+    final def !=[In1 <: In, Out1 >: Out](that: Expr[In1, Out1]): Expr[In1, Boolean] =
+      !(self === that)
+
+    final def <[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit ev: PrimitiveType[Out1]): Expr[In1, Boolean] =
+      Expr.LessThan(self, that)
+
+    final def >[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit ev: PrimitiveType[Out1]): Expr[In1, Boolean] =
+      !(self < that)
+
+    // Out extends Out2, every Dog is an Animal
+    // This is only done at compiletime, never being used at runtime
+    // This is a typesafe cast
+    final def widen[Out2](implicit ev: Out <:< Out2): Expr[In, Out2] =
+      self.asInstanceOf[Expr[In, Out2]]
+
+    final def >>>[Out2](that: Expr[Out, Out2]): Action[In, Out2] = ???
+
+  }
+  object Expr {
+    /* // Alternative to widen in trait,
+    // Only added when we have Expr[In,Boolean], using a widen method it is slightly better
+    implicit class ExprBoolSyntax[In](self: Expr[In,Boolean]) {
+      def &&[In1 <: In](that: Expr[In1, Boolean]): Expr[In1, Boolean] =
+        Expr.And(self, that)
+      def ||[In1 <: In](that: Expr[In1, Boolean]): Expr[In1, Boolean] =
+        Expr.Or(self, that)
+      def unary_! : Expr[In, Boolean] =
+        Expr.Not(self)
+    }
+     */
+    // Unsafe because there is an infinite number of types that can be
+    // provided as In
+    final case class UnsafeField[In, Out](
+      name: String,
+      tag: PrimitiveType[Out]
+    ) extends Expr[In, Out]
+    // does not need an input
+    final case class Constant[Out](value: Out, tag: PrimitiveType[Out])         extends Expr[Any, Out]
+    final case class And[In](left: Expr[In, Boolean], right: Expr[In, Boolean]) extends Expr[In, Boolean]
+    final case class Or[In](left: Expr[In, Boolean], right: Expr[In, Boolean])  extends Expr[In, Boolean]
+    final case class Not[In](value: Expr[In, Boolean])                          extends Expr[In, Boolean]
+    final case class EqualTo[In, Out](lhs: Expr[In, Out], rhs: Expr[In, Out])   extends Expr[In, Boolean]
+    final case class LessThan[In, Out](lhs: Expr[In, Out], rhs: Expr[In, Out])  extends Expr[In, Boolean]
+    // Used to create an Input, it is an identity. It lets Expr refer to its input
+    final case class Input[In](tag: PrimitiveType[In]) extends Expr[In, In]
+
+    final case class BinaryNumericOp[In, Out](
+      lhs: Expr[In, Out],
+      rhs: Expr[In, Out],
+      op: NumericBinOpType,
+      tag: Numeric[Out]
+    ) extends Expr[In, Out]
+
+    final case class Pipe[In, Out1, Out2](
+      left: Expr[In, Out1],
+      right: Expr[Out1, Out2]
+    ) extends Expr[In, Out1 with Out2]
+
+    implicit def apply[Out](out: Out)(implicit tag: PrimitiveType[Out]): Expr[Any, Out] = Constant(out, tag)
+
+    // Introducer for Expr, we also need an eliminator
+    def input[A](implicit tag: PrimitiveType[A]): Expr[A, A] = Input(tag)
+
+    def field[In, Out](name: String)(implicit tag: PrimitiveType[Out]): Expr[In, Out] = UnsafeField(name, tag)
+    //def unsafeField = ???
+
+    sealed trait NumericBinOpType
+    object NumericBinOpType {
+      case object Add extends NumericBinOpType
+      case object Sub extends NumericBinOpType
+      case object Mul extends NumericBinOpType
+      case object Div extends NumericBinOpType
+    }
+  }
+
+  final case class Condition[-In](expr: Expr[In, Boolean]) { self =>
+    def &&[In1 <: In](that: Condition[In1]): Condition[In1] =
+      Condition(self.expr && that.expr)
+
+    def ||[In1 <: In](that: Condition[In1]): Condition[In1] =
+      Condition(self.expr || that.expr)
+
+    def unary_! : Condition[In] = Condition(!self.expr)
+
+  }
+  // In => Boolean
+  //trait Condition[-In] { self =>
+
+  // We can't use a function, it's not serializable
+  // def contramap[In2](f: In2 => In): Condition[In2] = ???
+  // def contramap[In2](getter: Getter[In2, In]): Condition[In2] = ???
+
+  object Condition {
+    val always: Condition[Any]                      = constant(true)
+    val never: Condition[Any]                       = constant(false)
+    def constant[In](value: Boolean): Condition[In] = Condition(Expr(value))
+    def isEqualTo[In: PrimitiveType](rhs: In): Condition[In] =
+      Condition(Expr.input[In] === Expr(rhs))
+
+    def isLessThan[In](rhs: In)(implicit ordering: PrimitiveType[In]): Condition[In] =
+      Condition(Expr.input[In] < Expr(rhs))
+
+    def isGreaterThan[In](in: In)(implicit ordering: PrimitiveType[In]): Condition[In] =
+      Condition(Expr.input[In] > Expr(in))
+
+  }
+
+  def constrainedPolymorphicFunction[A](a: A)(implicit pt: PrimitiveType[A]): A = a
+
+  // In => List[Out]
+  // Out are fine grained instructions telling the engine what to do
+  // Deal with structural data generically (i.e. shapeless, zio.schema)
+  trait Action[-In, +Out] { self =>
+
+    final def ++[In1 <: In, Out1 >: Out](that: Action[In1, Out1]): Action[In1, Out1] =
+      Action.Concat(self, that)
+    //Action(in => self.update(in) ++ that.update(in))
+
+    final def >>>[Out2](that: Action[Out, Out2]): Action[In, Out2] =
+      Action.Pipe(self, that)
+
+    //Action(in => update(in).flatMap(that.update))
+
+  }
+  object Action {
+    final case class Concat[In, Out](
+      left: Action[In, Out],
+      right: Action[In, Out]
+    ) extends Action[In, Out]
+
+    final case class Pipe[In, Out1, Out2](
+      left: Action[In, Out1],
+      right: Action[Out1, Out2]
+    ) extends Action[In, Out1 with Out2]
+
+    final case class Constant[Out](
+      value: Out,
+      pt: PrimitiveType[Out]
+    ) extends Action[Any, Out]
+
+    final case class FromExpr[In, Out](expr: Expr[In, Out]) extends Action[In, Out]
+
+    def serializable[Out](c: Constant[Out]): String =
+      c.pt match {
+        case PrimitiveType.ByteType    => c.value.toString
+        case PrimitiveType.ShortType   => c.value.toString
+        case PrimitiveType.CharType    => c.value.toString
+        case PrimitiveType.IntType     => c.value.toString
+        case PrimitiveType.DoubleType  => c.value.toString
+        case PrimitiveType.StringType  => c.value.toString
+        case PrimitiveType.FloatType   => c.value.toString
+        case PrimitiveType.LongType    => c.value.toString
+        case PrimitiveType.BooleanType => c.value.toString
+      }
+    //def constant[Out](out: Out)(implicit pt: PrimitiveType[Out]): Action[Any, Out] = Constant(out, pt)
+
+    def fromExpr[In, Out](expr: Expr[In, Out]): Action[In, Out] = FromExpr(expr)
+  }
+
+  // sealed trait RuntimeTypeTag[T]
+  // object RuntimeTypeTag {
+  //   implicit case object ByteTag   extends RuntimeTypeTag[Byte]
+  //   implicit case object ShortTag  extends RuntimeTypeTag[Short]
+  // }
+  // We constrain the polymorphism to a set of types
+  // We enforce the type at compile time and wire it with the RuntimeTypeTag[T]
+  // final case class ConstantOld[Out](value: Out, runtimeTypeTag[Out]) extends Action[Any, Out]
+  //ConstantOld("foo", runtimeTypeTag[String])")
+
+  object loalty {
+    import Ordering._
+    import net.degoes.afd.examples.loyalty._
+    import net.degoes.afd.examples.loyalty.LoyaltyTier._
+
+    val statusCondition1: Condition[String] =
+      Condition.isEqualTo[String]("confirmed") //FlightBookingStatus.Confirmed)
+
+    val priceCondition1: Condition[Double] =
+      Condition.isGreaterThan[Double](100.0)
+
+    val combinedExample = statusCondition1 && priceCondition1
+
+    val test = combinedExample.expr
+
+    val unsafeUnTyped1 =
+      Condition(Expr.field[FlightBooking, String]("status") === Expr("Confirmed"))
+
+    val unsafeUnTyped2 =
+      Condition(Expr.field[FlightBooking, Double]("price") === Expr(100.0))
+
+    /* Using contramap did not work.
+    val statusCondition1: Condition[String] =
+      Condition.isEqualTo[String]("confirmed") //FlightBookingStatus.Confirmed)
+
+    val priceCondition1: Condition[Double] =
+      Condition.isGreaterThan[Double](100.0)
+
+    val statusCondition: Condition[FlightBooking] =
+      Condition
+        .isEqualTo[String]("confirmed")
+        .contramap[FlightBooking](Getter.Field("status")) //FlightBookingStatus.Confirmed)
+
+    val priceCondition: Condition[FlightBooking] =
+      Condition.isGreaterThan[Double](100.0).contramap[FlightBooking](Getter.Field("price"))
+      
+    val combinedExample = statusCondition && priceCondition
+     */
+  }
+}

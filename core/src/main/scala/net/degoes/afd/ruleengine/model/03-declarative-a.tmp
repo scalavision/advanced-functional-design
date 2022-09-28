@@ -1,0 +1,237 @@
+package net.degoes.afd.ruleengine.model
+
+/**
+ * Executable encodings are free of boilerplate and fast and flexible. However,
+ * they tend to be less powerful and principled than declarative encodings,
+ * which can be used with infinitely many different interpreters, each doing
+ * something different (and useful!) with the model.
+ *
+ * In this section, you will refactor the rule engine you created to use the
+ * declarative encoding. In the process, you will discover _expressions_, which
+ * are recipes to describe the production of values from other values.
+ *
+ * To push this model to its logical conclusion, it will be necessary to
+ * eliminate all Scala functions, which raises questions about how well-typed
+ * you want to make the model.
+ */
+package net.degoes.afd.ruleengine
+
+/**
+ * Develop a fully declarative encoding of a rule engine. You are NOT allowed to
+ * use any Scala functions in your model. Rather, your model must be purely
+ * ADT-based. Attempt to make your model as type-safe as possible, but sacrifice
+ * type-safety if necessary in order to avoid the embedding of Scala functions
+ * in your model.
+ *
+ * You must develop an executor for the model which, given input and the rule
+ * set, produces actions as output.
+ */
+object declarative_a {
+
+  sealed trait Json
+  object Json {
+    final case class Obj(fields: Map[String, Json]) extends Json
+    final case class Arr(fields: Vector[Json])      extends Json
+    final case class Str(value: String)             extends Json
+    final case class Num(value: Double)             extends Json
+    final case class Bool(value: Boolean)           extends Json
+    case object Null                                extends Json
+  }
+
+  /*
+  sealed trait RuleEngine[-In, +Out] {
+    def update(in: In): Option[List[Out]]
+  }
+   */
+  final case class RuleEngine[-In, +Out](update: In => Option[List[Out]]) { self =>
+
+    def contramap[In2](f: In2 => In): RuleEngine[In2, Out] = RuleEngine(in2 => self.update(f(in2)))
+
+    def orElse[In1 <: In, Out1 >: Out](that: RuleEngine[In1, Out1]): RuleEngine[In1, Out1] =
+      RuleEngine(in => self.update(in) orElse that.update(in))
+
+    def updateWith[Out1 >: Out](in: In)(defaultOut: Out1, combine: (Out1, Out1) => Out1): Out1 =
+      self.update(in) match {
+        case None => defaultOut
+
+        case Some(outs) =>
+          outs.reduceOption(combine).getOrElse(defaultOut)
+      }
+  }
+  object RuleEngine {
+
+    def apply[In, Out](f: In => Option[List[Out]]): RuleEngine[In, Out] =
+      new RuleEngine(f)
+
+    /*
+    def fromRuleSet[In, Out](ruleSet: RuleSet[In, Out]): RuleEngine[In, Out] =
+      RuleEngine(in => ruleSet.rules.map(_.update(in)).reduceOption(_ ++ _))
+     */
+
+    val empty: RuleEngine[Any, Nothing] = RuleEngine(_ => None)
+
+    def collect[In, Out](pf: PartialFunction[In, Out]): RuleEngine[In, Out] =
+      RuleEngine(in => pf.lift(in).map(List(_)))
+
+    def constant[Out](out: Out): RuleEngine[Any, Out] = fromFunction(_ => out)
+
+    def fromFunction[In, Out](f: In => Out): RuleEngine[In, Out] = RuleEngine(in => Some(List(f(in))))
+
+    def fromRuleSet[In, Out](ruleSet: RuleSet[In, Out]): RuleEngine[In, Out] =
+      RuleEngine(??? /*ruleSet.update*/ )
+
+  }
+  final case class RuleSet[-In, +Out](rules: Vector[Rule[In, Out]]) { self =>
+    def +[In1 <: In, Out1 >: Out](that: Rule[In1, Out1]): RuleSet[In1, Out1] =
+      RuleSet(self.rules :+ that)
+
+    def ++[In1 <: In, Out1 >: Out](that: RuleSet[In1, Out1]): RuleSet[In1, Out1] =
+      RuleSet(self.rules ++ that.rules)
+
+    def addRule[In1 <: In, Out1 >: Out](that: Rule[In1, Out1]): RuleSet[In1, Out1] = self + that
+
+    /*
+    def update(in: In): Option[List[Out]] =
+      self.rules.find(_.condition.eval(in)).map { rule =>
+        rule.action.update(in)
+      }
+     */
+  }
+  object RuleSet {
+    def apply[In, Out](rule1: Rule[In, Out], rules: Rule[In, Out]*): RuleSet[In, Out] = RuleSet(
+      rule1 +: rules.toVector
+    )
+
+    val empty: RuleSet[Any, Nothing] = RuleSet(Vector.empty)
+  }
+
+  /* trait RuleSet[-In, +Out] */
+
+  final case class Rule[-In, +Out](condition: Condition[In], action: Action[In, Out])
+
+  /*trait Rule[-In, +Out] {
+    def update(in: In): Option[List[Out]]
+  }*/
+
+  // An Ordering that is trivial to serialize, but has very little power
+  sealed trait Ordering[A] extends scala.math.Ordering[A] {
+    private val delegate: scala.math.Ordering[A] = Ordering.toScalaOrdering(this)
+    def compare(x: A, y: A): Int                 = delegate.compare(x, y)
+  }
+  // declarative encoding of ordering
+  object Ordering {
+    implicit case object ByteOrdering   extends Ordering[Byte]
+    implicit case object ShortOrdering  extends Ordering[Short]
+    implicit case object CharOrdering   extends Ordering[Char]
+    implicit case object IntOrdering    extends Ordering[Int]
+    implicit case object DoubleOrdering extends Ordering[Double]
+    implicit case object StringOrdering extends Ordering[String]
+    implicit case object FloatOrdering  extends Ordering[Float]
+    implicit case object LongOrdering   extends Ordering[Long]
+
+    // This would be a possible path, but it has some issues
+    // case class Ordering2[A, B](orderingA: Ordering[A], orderingB: Ordering[B]) extends Ordering[(A, B)]
+
+    def toScalaOrdering[A](org: Ordering[A]): scala.math.Ordering[A] =
+      org match {
+        case ByteOrdering   => scala.math.Ordering[Byte]
+        case ShortOrdering  => scala.math.Ordering[Short]
+        case CharOrdering   => scala.math.Ordering[Char]
+        case IntOrdering    => scala.math.Ordering[Int]
+        case DoubleOrdering => scala.math.Ordering[Double]
+        case StringOrdering => scala.math.Ordering[String]
+        case FloatOrdering  => scala.math.Ordering[Float]
+        case LongOrdering   => scala.math.Ordering[Long]
+      }
+  }
+
+  trait Expression
+
+  trait Condition[-In] { self =>
+    def &&[In1 <: In](that: Condition[In1]): Condition[In1] =
+      Condition.And(self, that)
+
+    def ||[In1 <: In](that: Condition[In1]): Condition[In1] =
+      Condition.Or(self, that)
+
+    def unary_! : Condition[In] = Condition.Not(self)
+
+    def eval(in: In): Boolean = Condition.eval(self)(in)
+
+    // We can't use a function, it's not serializable
+    // def contramap[In2](f: In2 => In): Condition[In2] = ???
+    def contramap[In2](getter: Getter[In2, In]): Condition[In2] = ???
+  }
+
+  sealed trait Getter[-Whoele, +Part] {
+    def get(whole: Whoele): Part
+  }
+
+  object Getter {
+    final case class Field[A, B](fieldName: String) extends Getter[A, B] {
+      def get(whole: A): B = ???
+    }
+    /*
+    def apply[Whole, Part](f: Whole => Part): Getter[Whole, Part] = new Getter[Whole, Part] {
+      def get(whole: Whole): Part = f(whole)
+    }
+     */
+  }
+
+  object Condition {
+    final case class Constant(value: Boolean)                           extends Condition[Any]
+    final case class And[In](left: Condition[In], right: Condition[In]) extends Condition[In]
+    final case class Or[In](left: Condition[In], right: Condition[In])  extends Condition[In]
+    final case class Not[In](value: Condition[In])                      extends Condition[In]
+    final case class IsEqualTo[In](rhs: In, ordering: Ordering[In])     extends Condition[In]
+    // cheat: use double for now
+    final case class LessThan[In](rhs: In, ordering: Ordering[In]) extends Condition[In]
+
+    val always: Condition[Any]                      = constant(true)
+    val never: Condition[Any]                       = constant(false)
+    def constant[In](value: Boolean): Condition[In] = Constant(value)
+    def isEqualTo[In: Ordering](in: In): Condition[In] =
+      Condition.IsEqualTo(in, implicitly[Ordering[In]])
+
+    def isLessThan[In](in: In)(implicit ordering: Ordering[In]): Condition[In] =
+      Condition.LessThan(in, ordering)
+
+    def isGreaterThan[In](in: In)(implicit ordering: Ordering[In]): Condition[In] =
+      Condition.LessThan(in, ordering).unary_!
+
+    def eval[In](condition: Condition[In])(in: In): Boolean =
+      condition match {
+        case Constant(value)     => value
+        case And(left, right)    => eval(left)(in) && eval(right)(in)
+        case Or(left, right)     => eval(left)(in) || eval(right)(in)
+        case Not(condition)      => !eval(condition)(in)
+        case IsEqualTo(rhs, ord) => ord.compare(in, rhs) == 0
+        case LessThan(rhs, ord)  => ord.compare(in, rhs) < 0
+      }
+  }
+
+  trait Action[-In, +Out]
+  object Action {}
+
+  object loalty {
+    import Ordering._
+    import net.degoes.afd.examples.loyalty._
+    import net.degoes.afd.examples.loyalty.LoyaltyTier._
+
+    val statusCondition1: Condition[String] =
+      Condition.isEqualTo[String]("confirmed") //FlightBookingStatus.Confirmed)
+
+    val priceCondition1: Condition[Double] =
+      Condition.isGreaterThan[Double](100.0)
+
+    val statusCondition: Condition[FlightBooking] =
+      Condition
+        .isEqualTo[String]("confirmed")
+        .contramap[FlightBooking](Getter.Field("status")) //FlightBookingStatus.Confirmed)
+
+    val priceCondition: Condition[FlightBooking] =
+      Condition.isGreaterThan[Double](100.0).contramap[FlightBooking](Getter.Field("price"))
+
+    val combinedExample = statusCondition && priceCondition
+  }
+}
