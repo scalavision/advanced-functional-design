@@ -31,10 +31,13 @@ object FactDefinition {
       def tag: EngineType[T] = tag0
     }
 
-  def facts[N <: Singleton with String, Fields](name: N, factsType: FactsType[Fields]): KeyValue[N, Facts[Fields]] =
+  private def facts[N <: Singleton with String, Fields](
+    name: N,
+    factsType: FactsType[Fields]
+  ): KeyValue[N, Facts[Fields]] =
     FactDefinition[N, Facts[Fields]](name, EngineType.Composite(factsType))
 
-  def prim[N <: Singleton with String, T](name0: N)(implicit tag0: PrimitiveType[T]): KeyValue[N, T] =
+  private def prim[N <: Singleton with String, T](name0: N)(implicit tag0: PrimitiveType[T]): KeyValue[N, T] =
     new FactDefinition[(N, T)] {
       type Key   = N
       type Value = T

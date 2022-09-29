@@ -51,8 +51,9 @@ lazy val commonDeps = libraryDependencies ++= Seq(
   "com.h2database"   % "h2"                     % H2Version,
   "ch.qos.logback"   % "logback-classic"        % LogbackVersion,
   // "io.d11"          %% "zhttp-test"             % ZioHttpVersion % Test,
-  "dev.zio"         %% "zio-test"               % ZioVersion     % Test,
-  "dev.zio"         %% "zio-test-sbt"           % ZioVersion     % Test
+  "dev.zio"     %% "zio-test"     % ZioVersion % Test,
+  "com.lihaoyi" %% "pprint"       % "0.8.0"    % Test,
+  "dev.zio"     %% "zio-test-sbt" % ZioVersion % Test
 )
 
 lazy val core = (project in file("core"))
