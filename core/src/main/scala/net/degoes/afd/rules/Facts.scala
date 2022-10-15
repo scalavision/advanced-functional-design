@@ -1,6 +1,7 @@
 package net.degoes.afd.rules
 
 import zio._
+import zio.Chunk
 
 sealed trait FactDefinition[KeyValue] { self =>
   type Key <: Singleton with String
@@ -45,6 +46,9 @@ object FactDefinition {
       def tag: EngineType[T] = EngineType.Primitive(tag0)
     }
 
+  def fromPrimitive[N <: Singleton with String, T](name0: N)(implicit tag0: PrimitiveType[T]): KeyValue[N, T] =
+    prim(name0)
+
   def boolean[N <: Singleton with String](name0: N): KeyValue[N, Boolean] = FactDefinition.prim[N, Boolean](name0)
 
   def byte[N <: Singleton with String](name0: N): KeyValue[N, Byte] = FactDefinition.prim[N, Byte](name0)
@@ -66,10 +70,13 @@ object FactDefinition {
 }
 
 sealed abstract case class Facts[+Types] private (private val data: Map[FactDefinition[_], Any]) { self =>
+
   def ++[Types2](that: Facts[Types2]): Facts[Types & Types2] =
     new Facts[Types & Types2](data ++ that.data) {}
 
   def definitions: Chunk[FactDefinition[_]] = Chunk.fromIterable(data.keys)
+
+  def engineType[T >: Types]: EngineType[Facts[T]] = EngineType.Composite(FactsType.fromFacts(self))
 
   def get[Key <: Singleton with String, Value: PrimitiveType](pd: FactDefinition[(Key, Value)])(implicit
     subset: Types <:< (Key, Value)
@@ -102,7 +109,8 @@ sealed abstract case class Facts[+Types] private (private val data: Map[FactDefi
 object Facts {
 
   /**
-   * An empty facts collection.
+   * An empty facts collection, the initial starting point for building facts.
    */
-  val empty: Facts[Any] = new Facts[Any](Map.empty) {}
+  def empty: Facts[Any] = new Facts[Any](Map.empty) {}
+
 }

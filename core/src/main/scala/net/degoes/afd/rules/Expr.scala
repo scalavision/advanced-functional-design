@@ -3,6 +3,7 @@ package net.degoes.afd.rules
 import scala.language.implicitConversions
 import zio._
 
+// Facts[("age", Int), ("name", String), ("isAlive", Boolean)]
 sealed trait Expr[-In, +Out] { self =>
 
   /* From Slack
@@ -51,16 +52,16 @@ sealed trait Expr[-In, +Out] { self =>
   final def >[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit ev: PrimitiveType[Out1]): Expr[In1, Boolean] =
     !(self < that)
 
-  def >=[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit ev: PrimitiveType[Out1]): Expr[In1, Boolean] =
+  final def >=[In1 <: In, Out1 >: Out](that: Expr[In1, Out1])(implicit ev: PrimitiveType[Out1]): Expr[In1, Boolean] =
     !(self < that) || (self === that)
 
-  def ifTrue[In1 <: In, Out2](
+  final def ifTrue[In1 <: In, Out2](
     ifTrue: Expr[In1, Out2]
   )(implicit
     ev: Out <:< Boolean
   ): Expr.IfTrue[In1, Out2] = Expr.IfTrue(self.widen[Boolean], ifTrue)
 
-  def eval(facts: Facts[In]): Out = Expr.eval(facts, self)
+  final def eval(facts: In): Out = Expr.eval(facts, self)
 
   // Out extends Out2, every Dog is an Animal
   // This is only done at compiletime, never being used at runtime
@@ -123,10 +124,69 @@ object Expr {
   implicit def apply[Out](out: Out)(implicit tag: PrimitiveType[Out]): Expr[Any, Out] =
     Constant(out, EngineType.Primitive(tag))
 
-  implicit def apply[Out](out: Facts[Out]): Expr[Any, Out] = ???
-  //Constant(out, Facts.engineTypeOfEngine[Out](out))
+  implicit def apply[Out](out: Facts[Out]): Expr[Any, Facts[Out]] =
+    Constant(out, EngineType.fromFacts[Out](out))
 
-  def eval[In, Out](in: Facts[In], expr: Expr[In, Out]): Out = ???
+  // def evalWithType[In, Out](in: Facts[In], expr: Expr[In,Out]): (EngineType[Out], Out) = ???
+
+  def eval[In, Out](in: In, expr: Expr[In, Out]): Out =
+    expr match {
+      case Fact(factDef, value) =>
+        implicit val tag = factDef.tag
+        Facts.empty.add(factDef, value)
+
+      case CombineFacts(left, right) =>
+        val leftFacts  = eval(in, left)
+        val rightFacts = eval(in, right)
+        leftFacts ++ rightFacts
+
+      case Constant(value, tag) => value
+
+      case And(left, right) =>
+        val lhs = eval(in, left)
+        val rhs = eval(in, right)
+        lhs && rhs
+
+      case Or(left, right) =>
+        val lhs = eval(in, left)
+        val rhs = eval(in, right)
+        lhs || rhs
+
+      case Not(value) =>
+        !eval(in, value)
+
+      case EqualTo(lhs, rhs) =>
+        val l = eval(in, lhs)
+        val r = eval(in, rhs)
+        l == r // FIXME: not correct for all types
+
+      case LessThan(lhs, rhs) =>
+        val l = eval(in, lhs)
+        val r = eval(in, rhs)
+
+        ???
+
+      case Input(factDef) =>
+        val fieldValue = Unsafe.unsafe { implicit u =>
+          //in.unsafe.get(factDef)
+          ???
+        }
+        fieldValue.asInstanceOf[Out]
+
+      case Pipe(left, right) => ???
+
+      case BinaryNumericOp(lhs, rhs, op, tag0) =>
+        val tag   = tag0.asInstanceOf[Numeric[Out]]
+        val left  = eval(in, lhs)
+        val right = eval(in, rhs)
+        tag(op)(left, right)
+
+      case IfThenElse(condition, ifTrue, ifFalse) =>
+        val bool = eval(in, condition)
+        if (bool) eval(in, ifTrue)
+        else eval(in, ifFalse)
+    }
+
   // Introducer for Expr, we also need an eliminator
   //def input[A](implicit tag: PrimitiveType[A]): Expr[A, A] = Input(tag)
   def input[K <: Singleton with String, V](factDef: FactDefinition.KeyValue[K, V]): Expr[(K, V), V] =
@@ -138,8 +198,7 @@ object Expr {
   ): Expr[In, Facts[(K, V)]] =
     Fact(factDef, value)
 
-  def ifThenElse[In, Out](
-    condition: Expr[In, Boolean],
+  def ifThenElse[In, Out](condition: Expr[In, Boolean])(
     ifTrue: Expr[In, Out],
     ifFalse: Expr[In, Out]
   ): Expr[In, Out] =
@@ -147,10 +206,11 @@ object Expr {
 
   sealed trait NumericBinOpType
   object NumericBinOpType {
-    case object Add extends NumericBinOpType
-    case object Sub extends NumericBinOpType
-    case object Mul extends NumericBinOpType
-    case object Div extends NumericBinOpType
+    case object Add    extends NumericBinOpType
+    case object Sub    extends NumericBinOpType
+    case object Mul    extends NumericBinOpType
+    case object Div    extends NumericBinOpType
+    case object Modulo extends NumericBinOpType
   }
 
   def evalWithType[In, Out](in: Facts[In], expr: Expr[In, Out]): (EngineType[Out], Out) = ???
