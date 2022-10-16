@@ -12,14 +12,17 @@ trait Action[-In, +Out] { self =>
   final def update[In1 <: In](in: In1) = ???
   //Action.FromExpr(in => update(in).flatMap(that.update))
 
-  def eval(facts: In): List[Out] = self match {
-    case Action.Concat(left, right) =>
-      left.eval(facts) ++ right.eval(facts)
+  def eval(facts: In): List[Out] =
+    self match {
+      case Action.Concat(left, right) =>
+        left.eval(facts) ++ right.eval(facts)
 
-    case Action.Pipe(left, right) => ??? //eval
-    case Action.FromExpr(expr) =>
-      List(expr.eval(facts))
-  }
+      case Action.Pipe(left, right) =>
+        left.eval(facts).flatMap(right.eval(_))
+
+      case Action.FromExpr(expr) =>
+        List(expr.eval(facts))
+    }
 
 }
 object Action {
@@ -31,7 +34,7 @@ object Action {
   final case class Pipe[In, Out1, Out2](
     left: Action[In, Out1],
     right: Action[Out1, Out2]
-  ) extends Action[In, Out1 with Out2]
+  ) extends Action[In, Out2]
 
   final case class Constant[Out](
     value: Out,

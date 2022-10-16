@@ -61,7 +61,7 @@ sealed trait Expr[-In, +Out] { self =>
     ev: Out <:< Boolean
   ): Expr.IfTrue[In1, Out2] = Expr.IfTrue(self.widen[Boolean], ifTrue)
 
-  final def eval(facts: In): Out = Expr.eval(facts, self)
+  final def eval(in: In): Out = Expr.eval(in, self)
 
   // Out extends Out2, every Dog is an Animal
   // This is only done at compiletime, never being used at runtime
@@ -98,10 +98,12 @@ object Expr {
   final case class Not[In](value: Expr[In, Boolean])                          extends Expr[In, Boolean]
   final case class EqualTo[In, Out](lhs: Expr[In, Out], rhs: Expr[In, Out])   extends Expr[In, Boolean]
   final case class LessThan[In, Out](lhs: Expr[In, Out], rhs: Expr[In, Out])  extends Expr[In, Boolean]
-  // Used to create an Input, it is an identity. It lets Expr refer to its input
-  final case class Input[K <: Singleton with String, V, In](
+  final case class InputIdentity[In](engineType: EngineType[In])              extends Expr[In, In]
+  // Produces a Fact, and factDef can be used to extract the value from the fact
+  final case class Get[In, K <: Singleton with String, V](
+    expr: Expr[In, Facts[(K, V)]],
     factDef: FactDefinition.KeyValue[K, V]
-  ) extends Expr[(K, V), V]
+  ) extends Expr[In, V]
 
   final case class BinaryNumericOp[In, Out](
     lhs: Expr[In, Out],
@@ -113,7 +115,7 @@ object Expr {
   final case class Pipe[In, Out1, Out2](
     left: Expr[In, Out1],
     right: Expr[Out1, Out2]
-  ) extends Expr[In, Out1 with Out2]
+  ) extends Expr[In, Out2]
 
   final case class IfThenElse[In, Out](
     condition: Expr[In, Boolean],
@@ -127,70 +129,81 @@ object Expr {
   implicit def apply[Out](out: Facts[Out]): Expr[Any, Facts[Out]] =
     Constant(out, EngineType.fromFacts[Out](out))
 
-  // def evalWithType[In, Out](in: Facts[In], expr: Expr[In,Out]): (EngineType[Out], Out) = ???
+  private def eval[In, Out](in: In, expr: Expr[In, Out]): Out =
+    evalWithType(in, expr)._2
 
-  def eval[In, Out](in: In, expr: Expr[In, Out]): Out =
+  private def evalWithType[In, Out](in: In, expr: Expr[In, Out]): (EngineType[Out], Out) =
     expr match {
       case Fact(factDef, value) =>
         implicit val tag = factDef.tag
-        Facts.empty.add(factDef, value)
-
+        (
+          EngineType.fromFacts(Facts.empty.add(factDef, value)).asInstanceOf[EngineType[Out]],
+          Facts.empty.add(factDef, value)
+        )
       case CombineFacts(left, right) =>
         val leftFacts  = eval(in, left)
         val rightFacts = eval(in, right)
-        leftFacts ++ rightFacts
+        val facts      = leftFacts ++ rightFacts
+        (EngineType.fromFacts(facts).asInstanceOf[EngineType[Out]], facts)
 
-      case Constant(value, tag) => value
+      case Constant(value, tag) =>
+        (tag.asInstanceOf[EngineType[Out]], value)
 
       case And(left, right) =>
         val lhs = eval(in, left)
         val rhs = eval(in, right)
-        lhs && rhs
+        (EngineType.fromPrimitive[Boolean].asInstanceOf[EngineType[Out]], lhs && rhs)
 
       case Or(left, right) =>
         val lhs = eval(in, left)
         val rhs = eval(in, right)
-        lhs || rhs
+        (EngineType.fromPrimitive[Boolean].asInstanceOf[EngineType[Out]], lhs || rhs)
 
       case Not(value) =>
-        !eval(in, value)
+        val v = eval(in, value)
+        (EngineType.fromPrimitive[Boolean].asInstanceOf[EngineType[Out]], !v)
 
       case EqualTo(lhs, rhs) =>
-        val l = eval(in, lhs)
-        val r = eval(in, rhs)
-        l == r // FIXME: not correct for all types
+        val (leftType, left) = evalWithType(in, lhs)
+        val right            = eval(in, rhs)
+        import PrimitiveType._
+        (EngineType.fromPrimitive[Boolean].asInstanceOf[EngineType[Out]], leftType.equals(left, right))
 
       case LessThan(lhs, rhs) =>
-        val l = eval(in, lhs)
-        val r = eval(in, rhs)
+        val (leftType, left) = evalWithType(in, lhs)
+        val right            = eval(in, rhs)
+        import PrimitiveType._
+        (EngineType.fromPrimitive[Boolean].asInstanceOf[EngineType[Out]], leftType.lessThan(left, right))
 
-        ???
+      case InputIdentity(tag) =>
+        (tag.asInstanceOf[EngineType[Out]], in.asInstanceOf[Out])
 
-      case Input(factDef) =>
-        val fieldValue = Unsafe.unsafe { implicit u =>
-          //in.unsafe.get(factDef)
-          ???
-        }
-        fieldValue.asInstanceOf[Out]
-
-      case Pipe(left, right) => ???
+      // expr will create a value, factDefinition will define it
+      case Get(expr, factDef) =>
+        val facts = eval(in, expr)
+        val value = Unsafe.unsafe(implicit u => facts.unsafe.get(factDef))
+        (factDef.tag.asInstanceOf[EngineType[Out]], value.asInstanceOf[Out])
 
       case BinaryNumericOp(lhs, rhs, op, tag0) =>
         val tag   = tag0.asInstanceOf[Numeric[Out]]
         val left  = eval(in, lhs)
         val right = eval(in, rhs)
-        tag(op)(left, right)
+        (EngineType.Primitive(tag0.primitiveType).asInstanceOf[EngineType[Out]], tag(op)(left, right))
+
+      case Pipe(left, right) =>
+        val leftValue = eval(in, left)
+        evalWithType(leftValue, right)
 
       case IfThenElse(condition, ifTrue, ifFalse) =>
-        val bool = eval(in, condition)
-        if (bool) eval(in, ifTrue)
-        else eval(in, ifFalse)
+        val (conditionType, bool) = evalWithType(in, condition)
+        if (bool) evalWithType(in, ifTrue)
+        else evalWithType(in, ifFalse)
     }
 
   // Introducer for Expr, we also need an eliminator
   //def input[A](implicit tag: PrimitiveType[A]): Expr[A, A] = Input(tag)
-  def input[K <: Singleton with String, V](factDef: FactDefinition.KeyValue[K, V]): Expr[(K, V), V] =
-    Input(factDef)
+  def input[A](engineType: EngineType[A]): Expr[A, A] =
+    InputIdentity(engineType)
 
   def fact[In, K <: Singleton with String, V](
     factDef: FactDefinition.KeyValue[K, V],
@@ -213,6 +226,6 @@ object Expr {
     case object Modulo extends NumericBinOpType
   }
 
-  def evalWithType[In, Out](in: Facts[In], expr: Expr[In, Out]): (EngineType[Out], Out) = ???
+  //def evalWithType[In, Out](in: Facts[In], expr: Expr[In, Out]): (EngineType[Out], Out) = ???
 
 }

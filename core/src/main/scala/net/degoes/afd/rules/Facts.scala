@@ -3,7 +3,7 @@ package net.degoes.afd.rules
 import zio._
 import zio.Chunk
 
-sealed trait FactDefinition[KeyValue] { self =>
+sealed trait FactDefinition[KeyValue] {
   type Key <: Singleton with String
   type Value
 
@@ -11,7 +11,22 @@ sealed trait FactDefinition[KeyValue] { self =>
 
   def tag: EngineType[Value]
 
-  def get: Expr[(Key, Value), Value] = Expr.input(self.asInstanceOf[FactDefinition.KeyValue[Key, Value]])
+  def self: FactDefinition.KeyValue[Key, Value] =
+    self.asInstanceOf[FactDefinition.KeyValue[Key, Value]]
+
+  val singeltonType: EngineType[Facts[(Key, Value)]] =
+    EngineType.Composite(
+      FactsType.empty.add[(Key, Value)](
+        self
+      )
+    )
+
+  def get: Expr[Facts[(Key, Value)], Value] = {
+    type A = Facts[(Key, Value)]
+    val fields: Expr[Facts[(Key, Value)], Facts[(Key, Value)]] = Expr.input[A](singeltonType)
+
+    Expr.Get(fields, self)
+  }
 
   def set[In](value: Expr[In, Value]): Expr[In, Facts[(Key, Value)]] =
     Expr.fact(self.asInstanceOf[FactDefinition.KeyValue[Key, Value]], value)
@@ -32,7 +47,7 @@ object FactDefinition {
       def tag: EngineType[T] = tag0
     }
 
-  private def facts[N <: Singleton with String, Fields](
+  def facts[N <: Singleton with String, Fields](
     name: N,
     factsType: FactsType[Fields]
   ): KeyValue[N, Facts[Fields]] =
@@ -77,6 +92,15 @@ sealed abstract case class Facts[+Types] private (private val data: Map[FactDefi
   def definitions: Chunk[FactDefinition[_]] = Chunk.fromIterable(data.keys)
 
   def engineType[T >: Types]: EngineType[Facts[T]] = EngineType.Composite(FactsType.fromFacts(self))
+
+  override def equals(that: Any): Boolean = that match {
+    case that: Facts[_] => self.data == that.data
+    case _              => false
+  }
+
+  // TODO: needs to be implemented
+  def lessThan(that: Facts[_]): Boolean = false
+  //self.data.keySet.subsetOf(that.data.keySet)
 
   def get[Key <: Singleton with String, Value: PrimitiveType](pd: FactDefinition[(Key, Value)])(implicit
     subset: Types <:< (Key, Value)
