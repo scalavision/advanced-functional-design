@@ -4,13 +4,11 @@ trait Action[-In, +Out] { self =>
 
   final def ++[In1 <: In, Out1 >: Out](that: Action[In1, Out1]): Action[In1, Out1] =
     Action.Concat(self, that)
-  //Action(in => self.update(in) ++ that.update(in))
 
   final def >>>[Out2](that: Action[Out, Out2]): Action[In, Out2] =
     Action.Pipe(self, that)
 
   final def update[In1 <: In](in: In1) = ???
-  //Action.FromExpr(in => update(in).flatMap(that.update))
 
   def eval(facts: In): List[Out] =
     self match {

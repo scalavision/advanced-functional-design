@@ -3,14 +3,8 @@ package net.degoes.afd.rules
 import scala.language.implicitConversions
 import zio._
 
-// Facts[("age", Int), ("name", String), ("isAlive", Boolean)]
 sealed trait Expr[-In, +Out] { self =>
 
-  /* From Slack
-      final def ++ [In1 <: In, Fields1, Fields2](that: Expr[In1, Facts[Fields2]])(implicit ev: Out <:< Facts[Fields1]): Expr[In1, Facts[Fields1 & Fields2]] =
-        Expr.CombineFacts(self.widen[Facts[Fields1]], that)
-
-   */
   final def ++[In1 <: In, Fields1, Fields2](that: Expr[In1, Facts[Fields2]])(implicit
     ev: Out <:< Facts[Fields1]
   ): Expr[In1, Facts[Fields1 & Fields2]] =
@@ -63,9 +57,6 @@ sealed trait Expr[-In, +Out] { self =>
 
   final def eval(in: In): Out = Expr.eval(in, self)
 
-  // Out extends Out2, every Dog is an Animal
-  // This is only done at compiletime, never being used at runtime
-  // This is a typesafe cast
   final def widen[Out2](implicit ev: Out <:< Out2): Expr[In, Out2] =
     self.asInstanceOf[Expr[In, Out2]]
 
